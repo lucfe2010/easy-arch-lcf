@@ -425,7 +425,7 @@ arch-chroot /mnt /bin/bash -e <<EOF
     chmod 750 /.snapshots
 
     # Installing GRUB.
-    grub-install --target=x86_64-efi --efi-directory=/efi/ --bootloader-id=GRUB &>/dev/null
+    grub-install --target=x86_64-efi --efi-directory=/efi --bootloader-id=GRUB &>/dev/null
 
     # Creating grub config file.
     grub-mkconfig -o /boot/grub/grub.cfg &>/dev/null
