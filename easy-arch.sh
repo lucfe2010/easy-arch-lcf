@@ -62,7 +62,7 @@ network_selector () {
     info_print "5) I will do this on my own (only advanced users)"
     input_print "Please select the number of the corresponding networking utility (e.g. 1): "
     read -r network_choice
-    if ! [[ "$network_choice" =~ ^[1-5]$ ]]; then
+    if ! ((1 <= network_choice <= 5)); then
         error_print "You did not enter a valid selection, please try again."
         return 1
     fi
@@ -275,7 +275,6 @@ BTRFS="/dev/disk/by-partlabel/ROOT"
 # Informing the Kernel of the changes.
 info_print "Informing the Kernel about the disk changes."
 partprobe "$DISK"
-udevadm settle
 
 # Formatting the ESP as FAT32.
 info_print "Formatting the EFI Partition as FAT32."
@@ -359,7 +358,7 @@ arch-chroot /mnt /bin/bash -e <<EOF
     locale-gen &>/dev/null
 
     # Generating a new initramfs (errors are shown on purpose).
-    mkinitcpio -P
+    mkinitcpio -P &>/dev/null
 
     # Snapper configuration.
     umount /.snapshots
@@ -371,10 +370,10 @@ arch-chroot /mnt /bin/bash -e <<EOF
     chmod 750 /.snapshots
 
     # Installing GRUB (errors are shown on purpose).
-    grub-install --target=x86_64-efi --efi-directory=/efi --bootloader-id=GRUB --recheck
+    grub-install --target=x86_64-efi --efi-directory=/efi --bootloader-id=GRUB &>/dev/null
 
     # Creating grub config file.
-    grub-mkconfig -o /boot/grub/grub.cfg
+    grub-mkconfig -o /boot/grub/grub.cfg &>/dev/null
 
 EOF
 
