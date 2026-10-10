@@ -9,7 +9,7 @@ clear
 # Cosmetics (colours for text).
 BOLD='\e[1m'
 BRED='\e[91m'
-BBLUE='\e[34m'  
+BBLUE='\e[34m'
 BGREEN='\e[92m'
 BYELLOW='\e[93m'
 RESET='\e[0m'
@@ -29,32 +29,6 @@ error_print () {
     echo -e "${BOLD}${BRED}[ ${BBLUE}•${BRED} ] $1${RESET}"
 }
 
-# # Virtualization check (function).
-# virt_check () {
-#     hypervisor=$(systemd-detect-virt)
-#     case $hypervisor in
-#         kvm )   info_print "KVM has been detected, setting up guest tools."
-#                 pacstrap /mnt qemu-guest-agent &>/dev/null
-#                 systemctl enable qemu-guest-agent --root=/mnt &>/dev/null
-#                 ;;
-#         vmware  )   info_print "VMWare Workstation/ESXi has been detected, setting up guest tools."
-#                     pacstrap /mnt open-vm-tools >/dev/null
-#                     systemctl enable vmtoolsd --root=/mnt &>/dev/null
-#                     systemctl enable vmware-vmblock-fuse --root=/mnt &>/dev/null
-#                     ;;
-#         oracle )    info_print "VirtualBox has been detected, setting up guest tools."
-#                     pacstrap /mnt virtualbox-guest-utils &>/dev/null
-#                     systemctl enable vboxservice --root=/mnt &>/dev/null
-#                     ;;
-#         microsoft ) info_print "Hyper-V has been detected, setting up guest tools."
-#                     pacstrap /mnt hyperv &>/dev/null
-#                     systemctl enable hv_fcopy_daemon --root=/mnt &>/dev/null
-#                     systemctl enable hv_kvp_daemon --root=/mnt &>/dev/null
-#                     systemctl enable hv_vss_daemon --root=/mnt &>/dev/null
-#                     ;;
-#     esac
-# }
-
 # Selecting a kernel to install (function).
 kernel_selector () {
     info_print "List of kernels:"
@@ -62,7 +36,7 @@ kernel_selector () {
     info_print "2) Hardened: A security-focused Linux kernel"
     info_print "3) Longterm: Long-term support (LTS) Linux kernel"
     info_print "4) Zen Kernel: A Linux kernel optimized for desktop usage"
-    input_print "Please select the number of the corresponding kernel (e.g. 1): " 
+    input_print "Please select the number of the corresponding kernel (e.g. 1): "
     read -r kernel_choice
     case $kernel_choice in
         1 ) kernel="linux"
@@ -88,7 +62,7 @@ network_selector () {
     info_print "5) I will do this on my own (only advanced users)"
     input_print "Please select the number of the corresponding networking utility (e.g. 1): "
     read -r network_choice
-    if ! ((1 <= network_choice <= 5)); then
+    if ! [[ "$network_choice" =~ ^[1-5]$ ]]; then
         error_print "You did not enter a valid selection, please try again."
         return 1
     fi
@@ -114,6 +88,7 @@ network_installer () {
         4 ) info_print "Installing dhcpcd."
             pacstrap /mnt dhcpcd >/dev/null
             systemctl enable dhcpcd --root=/mnt &>/dev/null
+            ;;
     esac
 }
 
@@ -152,7 +127,7 @@ userpass_selector () {
         return 1
     fi
     echo
-    input_print "Please enter the password again (you're not going to see it): " 
+    input_print "Please enter the password again (you're not going to see it): "
     read -r -s userpass2
     echo
     if [[ "$userpass" != "$userpass2" ]]; then
@@ -173,7 +148,7 @@ rootpass_selector () {
         return 1
     fi
     echo
-    input_print "Please enter the password again (you're not going to see it): " 
+    input_print "Please enter the password again (you're not going to see it): "
     read -r -s rootpass2
     echo
     if [[ "$rootpass" != "$rootpass2" ]]; then
@@ -208,7 +183,7 @@ hostname_selector () {
 
 # User chooses the locale (function).
 locale_selector () {
-    input_print "Please insert the locale you use (format: xx_XX. Enter empty to use en_US, or \"/\" to search locales): " locale
+    input_print "Please insert the locale you use (format: xx_XX. Enter empty to use en_US, or \"/\" to search locales): "
     read -r locale
     case "$locale" in
         '') locale="en_US.UTF-8"
@@ -258,6 +233,12 @@ echo -ne "${BOLD}${BYELLOW}
 ======================================================================
 ${RESET}"
 info_print "Welcome to easy-arch, a script made in order to simplify the process of installing Arch Linux."
+
+# Check for UEFI boot mode.
+if [[ ! -d /sys/firmware/efi ]]; then
+    error_print "This script requires booting in UEFI mode (/sys/firmware/efi not found)."
+    exit 1
+fi
 
 # Setting up keyboard layout.
 until keyboard_selector; do : ; done
@@ -309,7 +290,7 @@ parted -s "$DISK" \
     mklabel gpt \
     mkpart ESP fat32 1MiB 1025MiB \
     set 1 esp on \
-    mkpart CRYPTROOT 1025MiB 100% \
+    mkpart CRYPTROOT 1025MiB 100%
 
 ESP="/dev/disk/by-partlabel/ESP"
 CRYPTROOT="/dev/disk/by-partlabel/CRYPTROOT"
@@ -317,15 +298,17 @@ CRYPTROOT="/dev/disk/by-partlabel/CRYPTROOT"
 # Informing the Kernel of the changes.
 info_print "Informing the Kernel about the disk changes."
 partprobe "$DISK"
+udevadm settle
 
 # Formatting the ESP as FAT32.
 info_print "Formatting the EFI Partition as FAT32."
 mkfs.fat -F 32 "$ESP" &>/dev/null
 
-# Creating a LUKS Container for the root partition.
+# Creating a LUKS2 Container for the root partition.
+# PBKDF2 is used because GRUB cannot read the default argon2id KDF.
 info_print "Creating LUKS Container for the root partition."
 echo -n "$password" | cryptsetup luksFormat --type luks2 --pbkdf pbkdf2 "$CRYPTROOT" -d - &>/dev/null
-echo -n "$password" | cryptsetup open "$CRYPTROOT" cryptroot -d - 
+echo -n "$password" | cryptsetup open "$CRYPTROOT" cryptroot -d -
 BTRFS="/dev/mapper/cryptroot"
 
 # Formatting the LUKS Container as BTRFS.
@@ -355,14 +338,15 @@ mount -o "$mountopts",subvol=@var_pkgs "$BTRFS" /mnt/var/cache/pacman/pkg
 chattr +C /mnt/var/log
 mount "$ESP" /mnt/efi/
 
-# Checking the microcode to install.
-microcode_detector
-
 # Creating a keyfile so the initramfs can unlock LUKS without a second prompt.
+# The keyfile lives inside the encrypted root; GRUB still unlocks with the passphrase.
 info_print "Creating LUKS keyfile."
 dd bs=512 count=4 iflag=fullblock if=/dev/urandom of=/mnt/cryptroot.key &>/dev/null
 chmod 000 /mnt/cryptroot.key
 echo -n "$password" | cryptsetup luksAddKey --pbkdf pbkdf2 --iter-time 1 "$CRYPTROOT" /mnt/cryptroot.key -d -
+
+# Checking the microcode to install.
+microcode_detector
 
 # Pacstrap (setting up a base sytem onto the new root).
 info_print "Installing the base system (it may take a while)."
@@ -388,33 +372,31 @@ cat > /mnt/etc/hosts <<EOF
 127.0.1.1   $hostname.localdomain   $hostname
 EOF
 
-# Virtualization check.
-# virt_check
-
 # Setting up the network.
 network_installer
 
-# Configuring /etc/mkinitcpio.conf.
+# Configuring /etc/mkinitcpio.conf (keyfile is embedded in the initramfs).
 info_print "Configuring /etc/mkinitcpio.conf."
-cat > /mnt/etc/mkinitcpio.conf <<EOF
-HOOKS=(systemd autodetect keyboard sd-vconsole modconf block sd-encrypt filesystems)
-EOF
-
-# Setting up LUKS2 encryption in grub.
-info_print "Setting up grub config."
-UUID=$(blkid -s UUID -o value $CRYPTROOT)
-sed -i "\,^GRUB_CMDLINE_LINUX=\"\",s,\",&rd.luks.name=$UUID=cryptroot root=$BTRFS," /mnt/etc/default/grub
-
 cat > /mnt/etc/mkinitcpio.conf <<EOF
 HOOKS=(systemd autodetect keyboard sd-vconsole modconf block sd-encrypt filesystems)
 FILES=(/cryptroot.key)
 EOF
 
-# Setting up LUKS2 encryption in grub.
+# Setting up LUKS2 encryption in grub and the initramfs.
 info_print "Setting up grub config."
 UUID=$(blkid -s UUID -o value "$CRYPTROOT")
+
+# sd-encrypt reads this file from the initramfs and unlocks with the keyfile (no second prompt).
+echo "cryptroot UUID=$UUID /cryptroot.key luks" > /mnt/etc/crypttab.initramfs
+
+# /boot lives on the encrypted root, so GRUB must be able to unlock it.
 sed -i 's/^#\?GRUB_ENABLE_CRYPTODISK=.*/GRUB_ENABLE_CRYPTODISK=y/' /mnt/etc/default/grub
-sed -i "\,^GRUB_CMDLINE_LINUX=\"\",s,\",&rd.luks.name=$UUID=cryptroot rd.luks.key=$UUID=/cryptroot.key root=$BTRFS," /mnt/etc/default/grub
+grep -q '^GRUB_ENABLE_CRYPTODISK=y' /mnt/etc/default/grub || echo 'GRUB_ENABLE_CRYPTODISK=y' >> /mnt/etc/default/grub
+sed -i 's/^#\?GRUB_PRELOAD_MODULES=.*/GRUB_PRELOAD_MODULES="part_gpt part_msdos luks2"/' /mnt/etc/default/grub
+grep -q '^GRUB_PRELOAD_MODULES=' /mnt/etc/default/grub || echo 'GRUB_PRELOAD_MODULES="part_gpt part_msdos luks2"' >> /mnt/etc/default/grub
+
+# Only the root device goes on the cmdline; rd.luks.* is handled by crypttab.initramfs.
+sed -i "\,^GRUB_CMDLINE_LINUX=\"\",s,\",&root=$BTRFS," /mnt/etc/default/grub
 
 # Configuring the system.
 info_print "Configuring the system (timezone, system clock, initramfs, Snapper, GRUB)."
@@ -429,8 +411,8 @@ arch-chroot /mnt /bin/bash -e <<EOF
     # Generating locales.
     locale-gen &>/dev/null
 
-    # Generating a new initramfs.
-    mkinitcpio -P &>/dev/null
+    # Generating a new initramfs (errors are shown on purpose).
+    mkinitcpio -P
 
     # Snapper configuration.
     umount /.snapshots
@@ -441,13 +423,16 @@ arch-chroot /mnt /bin/bash -e <<EOF
     mount -a &>/dev/null
     chmod 750 /.snapshots
 
-    # Installing GRUB.
-    grub-install --target=x86_64-efi --efi-directory=/efi --bootloader-id=GRUB &>/dev/null
+    # Installing GRUB (errors are shown on purpose).
+    grub-install --target=x86_64-efi --efi-directory=/efi --bootloader-id=GRUB --recheck
 
     # Creating grub config file.
-    grub-mkconfig -o /boot/grub/grub.cfg &>/dev/null
+    grub-mkconfig -o /boot/grub/grub.cfg
 
 EOF
+
+# The initramfs contains the keyfile, so restrict access to it.
+chmod 600 /mnt/boot/initramfs-*
 
 # Setting root password.
 info_print "Setting root password."
@@ -461,24 +446,6 @@ if [[ -n "$username" ]]; then
     info_print "Setting user password for $username."
     echo "$username:$userpass" | arch-chroot /mnt chpasswd
 fi
-
-# # Boot backup hook.
-# info_print "Configuring /boot backup when pacman transactions are made."
-# mkdir /mnt/etc/pacman.d/hooks
-# cat > /mnt/etc/pacman.d/hooks/50-bootbackup.hook <<EOF
-# [Trigger]
-# Operation = Upgrade
-# Operation = Install
-# Operation = Remove
-# Type = Path
-# Target = usr/lib/modules/*/vmlinuz
-
-# [Action]
-# Depends = rsync
-# Description = Backing up /boot...
-# When = PostTransaction
-# Exec = /usr/bin/rsync -a --delete /boot /.bootbackup
-# EOF
 
 # ZRAM configuration.
 info_print "Configuring ZRAM."
