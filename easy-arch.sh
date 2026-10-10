@@ -345,7 +345,7 @@ umount /mnt
 info_print "Mounting the newly created subvolumes."
 mountopts="ssd,noatime,compress-force=zstd:3,discard=async"
 mount -o "$mountopts",subvol=@ "$BTRFS" /mnt
-mkdir -p /mnt/{home,root,srv,.snapshots,var/{log,cache/pacman/pkg},boot}
+mkdir -p /mnt/{home,root,srv,.snapshots,var/{log,cache/pacman/pkg},efi}
 for subvol in "${subvols[@]:2}"; do
     mount -o "$mountopts",subvol=@"$subvol" "$BTRFS" /mnt/"${subvol//_//}"
 done
@@ -353,7 +353,7 @@ chmod 750 /mnt/root
 mount -o "$mountopts",subvol=@snapshots "$BTRFS" /mnt/.snapshots
 mount -o "$mountopts",subvol=@var_pkgs "$BTRFS" /mnt/var/cache/pacman/pkg
 chattr +C /mnt/var/log
-mount "$ESP" /mnt/boot/
+mount "$ESP" /mnt/efi/
 
 # Checking the microcode to install.
 microcode_detector
@@ -425,7 +425,7 @@ arch-chroot /mnt /bin/bash -e <<EOF
     chmod 750 /.snapshots
 
     # Installing GRUB.
-    grub-install --target=x86_64-efi --efi-directory=/boot/ --bootloader-id=GRUB &>/dev/null
+    grub-install --target=x86_64-efi --efi-directory=/efi/ --bootloader-id=GRUB &>/dev/null
 
     # Creating grub config file.
     grub-mkconfig -o /boot/grub/grub.cfg &>/dev/null
@@ -445,23 +445,23 @@ if [[ -n "$username" ]]; then
     echo "$username:$userpass" | arch-chroot /mnt chpasswd
 fi
 
-# Boot backup hook.
-info_print "Configuring /boot backup when pacman transactions are made."
-mkdir /mnt/etc/pacman.d/hooks
-cat > /mnt/etc/pacman.d/hooks/50-bootbackup.hook <<EOF
-[Trigger]
-Operation = Upgrade
-Operation = Install
-Operation = Remove
-Type = Path
-Target = usr/lib/modules/*/vmlinuz
+# # Boot backup hook.
+# info_print "Configuring /boot backup when pacman transactions are made."
+# mkdir /mnt/etc/pacman.d/hooks
+# cat > /mnt/etc/pacman.d/hooks/50-bootbackup.hook <<EOF
+# [Trigger]
+# Operation = Upgrade
+# Operation = Install
+# Operation = Remove
+# Type = Path
+# Target = usr/lib/modules/*/vmlinuz
 
-[Action]
-Depends = rsync
-Description = Backing up /boot...
-When = PostTransaction
-Exec = /usr/bin/rsync -a --delete /boot /.bootbackup
-EOF
+# [Action]
+# Depends = rsync
+# Description = Backing up /boot...
+# When = PostTransaction
+# Exec = /usr/bin/rsync -a --delete /boot /.bootbackup
+# EOF
 
 # ZRAM configuration.
 info_print "Configuring ZRAM."
