@@ -92,26 +92,6 @@ network_installer () {
     esac
 }
 
-# User enters a password for the LUKS Container (function).
-lukspass_selector () {
-    input_print "Please enter a password for the LUKS container (you're not going to see the password): "
-    read -r -s password
-    if [[ -z "$password" ]]; then
-        echo
-        error_print "You need to enter a password for the LUKS Container, please try again."
-        return 1
-    fi
-    echo
-    input_print "Please enter the password for the LUKS container again (you're not going to see the password): "
-    read -r -s password2
-    echo
-    if [[ "$password" != "$password2" ]]; then
-        error_print "Passwords don't match, please try again."
-        return 1
-    fi
-    return 0
-}
-
 # Setting up a password for the user account (function).
 userpass_selector () {
     input_print "Please enter name for a user account (enter empty to not create one): "
@@ -254,9 +234,6 @@ do
     break
 done
 
-# Setting up LUKS password.
-until lukspass_selector; do : ; done
-
 # Setting up the kernel.
 until kernel_selector; do : ; done
 
@@ -290,10 +267,10 @@ parted -s "$DISK" \
     mklabel gpt \
     mkpart ESP fat32 1MiB 1025MiB \
     set 1 esp on \
-    mkpart CRYPTROOT 1025MiB 100%
+    mkpart ROOT 1025MiB 100%
 
 ESP="/dev/disk/by-partlabel/ESP"
-CRYPTROOT="/dev/disk/by-partlabel/CRYPTROOT"
+BTRFS="/dev/disk/by-partlabel/ROOT"
 
 # Informing the Kernel of the changes.
 info_print "Informing the Kernel about the disk changes."
@@ -304,16 +281,9 @@ udevadm settle
 info_print "Formatting the EFI Partition as FAT32."
 mkfs.fat -F 32 "$ESP" &>/dev/null
 
-# Creating a LUKS2 Container for the root partition.
-# PBKDF2 is used because GRUB cannot read the default argon2id KDF.
-info_print "Creating LUKS Container for the root partition."
-echo -n "$password" | cryptsetup luksFormat --type luks2 --pbkdf pbkdf2 "$CRYPTROOT" -d - &>/dev/null
-echo -n "$password" | cryptsetup open "$CRYPTROOT" cryptroot -d -
-BTRFS="/dev/mapper/cryptroot"
-
-# Formatting the LUKS Container as BTRFS.
-info_print "Formatting the LUKS container as BTRFS."
-mkfs.btrfs "$BTRFS" &>/dev/null
+# Formatting the root partition as BTRFS.
+info_print "Formatting the root partition as BTRFS."
+mkfs.btrfs -f "$BTRFS" &>/dev/null
 mount "$BTRFS" /mnt
 
 # Creating BTRFS subvolumes.
@@ -337,13 +307,6 @@ mount -o "$mountopts",subvol=@snapshots "$BTRFS" /mnt/.snapshots
 mount -o "$mountopts",subvol=@var_pkgs "$BTRFS" /mnt/var/cache/pacman/pkg
 chattr +C /mnt/var/log
 mount "$ESP" /mnt/efi/
-
-# Creating a keyfile so the initramfs can unlock LUKS without a second prompt.
-# The keyfile lives inside the encrypted root; GRUB still unlocks with the passphrase.
-info_print "Creating LUKS keyfile."
-dd bs=512 count=4 iflag=fullblock if=/dev/urandom of=/mnt/cryptroot.key &>/dev/null
-chmod 000 /mnt/cryptroot.key
-echo -n "$password" | cryptsetup luksAddKey --pbkdf pbkdf2 --iter-time 1 "$CRYPTROOT" /mnt/cryptroot.key -d -
 
 # Checking the microcode to install.
 microcode_detector
@@ -375,30 +338,14 @@ EOF
 # Setting up the network.
 network_installer
 
-# Configuring /etc/mkinitcpio.conf (keyfile is embedded in the initramfs).
+# Configuring /etc/mkinitcpio.conf (no encrypt hook).
 info_print "Configuring /etc/mkinitcpio.conf."
 cat > /mnt/etc/mkinitcpio.conf <<EOF
-HOOKS=(systemd autodetect keyboard sd-vconsole modconf block sd-encrypt filesystems)
-FILES=(/cryptroot.key)
+HOOKS=(systemd autodetect keyboard sd-vconsole modconf block filesystems)
 EOF
 
-# Setting up LUKS2 encryption in grub and the initramfs.
-info_print "Setting up grub config."
-UUID=$(blkid -s UUID -o value "$CRYPTROOT")
-
-# sd-encrypt reads this file from the initramfs and unlocks with the keyfile (no second prompt).
-echo "cryptroot UUID=$UUID /cryptroot.key luks" > /mnt/etc/crypttab.initramfs
-
-# /boot lives on the encrypted root, so GRUB must be able to unlock it.
-sed -i 's/^#\?GRUB_ENABLE_CRYPTODISK=.*/GRUB_ENABLE_CRYPTODISK=y/' /mnt/etc/default/grub
-grep -q '^GRUB_ENABLE_CRYPTODISK=y' /mnt/etc/default/grub || echo 'GRUB_ENABLE_CRYPTODISK=y' >> /mnt/etc/default/grub
-sed -i 's/^#\?GRUB_PRELOAD_MODULES=.*/GRUB_PRELOAD_MODULES="part_gpt part_msdos luks2"/' /mnt/etc/default/grub
-grep -q '^GRUB_PRELOAD_MODULES=' /mnt/etc/default/grub || echo 'GRUB_PRELOAD_MODULES="part_gpt part_msdos luks2"' >> /mnt/etc/default/grub
-
-# Only the root device goes on the cmdline; rd.luks.* is handled by crypttab.initramfs.
-sed -i "\,^GRUB_CMDLINE_LINUX=\"\",s,\",&root=$BTRFS," /mnt/etc/default/grub
-
 # Configuring the system.
+# grub-mkconfig detects the root UUID and subvol=@ automatically.
 info_print "Configuring the system (timezone, system clock, initramfs, Snapper, GRUB)."
 arch-chroot /mnt /bin/bash -e <<EOF
 
@@ -430,9 +377,6 @@ arch-chroot /mnt /bin/bash -e <<EOF
     grub-mkconfig -o /boot/grub/grub.cfg
 
 EOF
-
-# The initramfs contains the keyfile, so restrict access to it.
-chmod 600 /mnt/boot/initramfs-*
 
 # Setting root password.
 info_print "Setting root password."
