@@ -324,7 +324,7 @@ mkfs.fat -F 32 "$ESP" &>/dev/null
 
 # Creating a LUKS Container for the root partition.
 info_print "Creating LUKS Container for the root partition."
-echo -n "$password" | cryptsetup luksFormat "$CRYPTROOT" -d - &>/dev/null
+echo -n "$password" | cryptsetup luksFormat --type luks2 --pbkdf pbkdf2 "$CRYPTROOT" -d - &>/dev/null
 echo -n "$password" | cryptsetup open "$CRYPTROOT" cryptroot -d - 
 BTRFS="/dev/mapper/cryptroot"
 
@@ -357,6 +357,12 @@ mount "$ESP" /mnt/efi/
 
 # Checking the microcode to install.
 microcode_detector
+
+# Creating a keyfile so the initramfs can unlock LUKS without a second prompt.
+info_print "Creating LUKS keyfile."
+dd bs=512 count=4 iflag=fullblock if=/dev/urandom of=/mnt/cryptroot.key &>/dev/null
+chmod 000 /mnt/cryptroot.key
+echo -n "$password" | cryptsetup luksAddKey --pbkdf pbkdf2 --iter-time 1 "$CRYPTROOT" /mnt/cryptroot.key -d -
 
 # Pacstrap (setting up a base sytem onto the new root).
 info_print "Installing the base system (it may take a while)."
@@ -398,6 +404,17 @@ EOF
 info_print "Setting up grub config."
 UUID=$(blkid -s UUID -o value $CRYPTROOT)
 sed -i "\,^GRUB_CMDLINE_LINUX=\"\",s,\",&rd.luks.name=$UUID=cryptroot root=$BTRFS," /mnt/etc/default/grub
+
+cat > /mnt/etc/mkinitcpio.conf <<EOF
+HOOKS=(systemd autodetect keyboard sd-vconsole modconf block sd-encrypt filesystems)
+FILES=(/cryptroot.key)
+EOF
+
+# Setting up LUKS2 encryption in grub.
+info_print "Setting up grub config."
+UUID=$(blkid -s UUID -o value "$CRYPTROOT")
+sed -i 's/^#\?GRUB_ENABLE_CRYPTODISK=.*/GRUB_ENABLE_CRYPTODISK=y/' /mnt/etc/default/grub
+sed -i "\,^GRUB_CMDLINE_LINUX=\"\",s,\",&rd.luks.name=$UUID=cryptroot rd.luks.key=$UUID=/cryptroot.key root=$BTRFS," /mnt/etc/default/grub
 
 # Configuring the system.
 info_print "Configuring the system (timezone, system clock, initramfs, Snapper, GRUB)."
